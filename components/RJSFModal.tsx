@@ -1,11 +1,10 @@
-import React, { useCallback, useState, useEffect } from 'react';
+import React from 'react';
 import Modal from 'react-modal';
 import Form from '@rjsf/core';
 import validator from '@rjsf/validator-ajv8';
-import { toast } from 'react-hot-toast';
-import { useEditorStore } from '@/stores/editorStore';
+import { ComponentVariation } from '@/types';
 
-// Set app element for accessibility
+// Set app element for screen readers
 if (typeof window !== 'undefined') {
   Modal.setAppElement('#__next');
 }
@@ -13,10 +12,11 @@ if (typeof window !== 'undefined') {
 interface RJSFModalProps {
   isOpen: boolean;
   onClose: () => void;
-  instanceId: string;
-  initialData: Record<string, any>;
+  onSubmit: (data: any) => void;
   schema: Record<string, any>;
+  formData: Record<string, any>;
   title: string;
+  componentName: string;
 }
 
 const modalStyles = {
@@ -27,99 +27,97 @@ const modalStyles = {
     bottom: 'auto',
     marginRight: '-50%',
     transform: 'translate(-50%, -50%)',
-    maxWidth: '600px',
+    maxWidth: '700px',
     width: '90%',
     maxHeight: '90vh',
     overflow: 'auto',
+    padding: '20px',
     borderRadius: '8px',
-    padding: '20px'
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)',
+    border: '1px solid #eee',
   },
   overlay: {
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    zIndex: 1000
-  }
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    zIndex: 1000,
+  },
 };
 
-export const RJSFModal: React.FC<RJSFModalProps> = ({
-  isOpen,
-  onClose,
-  instanceId,
-  initialData,
-  schema,
-  title
-}) => {
-  const [formData, setFormData] = useState<Record<string, any>>(initialData);
-  const updateComponentProps = useEditorStore((state) => state.updateComponentProps);
-  
-  // Reset form data when initialData changes
-  useEffect(() => {
-    if (isOpen) {
-      setFormData(initialData);
-    }
-  }, [initialData, isOpen]);
+// Custom theme for RJSF
+const theme = {
+  tagName: 'div',
+  widgets: {
+    // Additional custom widgets could be added here
+  },
+  templates: {
+    // Custom templates could be added here
+  },
+};
 
-  const handleSubmit = useCallback(({ formData }) => {
-    try {
-      updateComponentProps(instanceId, formData);
-      toast.success('Component updated successfully!');
-      onClose();
-    } catch (error) {
-      console.error('Failed to update component:', error);
-      toast.error('Failed to update component properties');
-    }
-  }, [instanceId, updateComponentProps, onClose]);
-
-  const handleCancel = useCallback(() => {
+export function RJSFModal({ 
+  isOpen, 
+  onClose, 
+  onSubmit, 
+  schema, 
+  formData, 
+  title,
+  componentName
+}: RJSFModalProps) {
+  const handleSubmit = ({ formData }: { formData: any }) => {
+    onSubmit(formData);
     onClose();
-  }, [onClose]);
+  };
 
   return (
     <Modal
       isOpen={isOpen}
       onRequestClose={onClose}
       style={modalStyles}
-      contentLabel={`Edit ${title}`}
+      contentLabel={`Edit ${componentName}`}
     >
-      <div className="rjsf-modal">
-        <h2 style={{ marginTop: 0 }}>{title}</h2>
-        <Form
-          schema={schema}
-          formData={formData}
-          validator={validator}
-          onChange={({ formData }) => setFormData(formData)}
-          onSubmit={handleSubmit}
-          onError={(errors) => console.error('Form validation errors:', errors)}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+        <h2 style={{ margin: 0 }}>{title}</h2>
+        <button 
+          onClick={onClose}
+          style={{ background: 'none', border: 'none', fontSize: '20px', cursor: 'pointer' }}
+          aria-label="Close modal"
         >
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '20px' }}>
-            <button 
-              type="button" 
-              onClick={handleCancel}
-              style={{ 
-                padding: '8px 16px',
-                background: '#f0f0f0',
-                border: '1px solid #ccc',
-                borderRadius: '4px',
-                cursor: 'pointer' 
-              }}
-            >
-              Cancel
-            </button>
-            <button 
-              type="submit"
-              style={{ 
-                padding: '8px 16px',
-                background: '#0070f3',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              Save Changes
-            </button>
-          </div>
-        </Form>
+          &times;
+        </button>
+      </div>
+
+      <Form
+        schema={schema}
+        validator={validator}
+        formData={formData}
+        onSubmit={handleSubmit}
+        liveValidate
+        // @ts-ignore - The theme type isn't properly recognized
+        uiSchema={{
+          'ui:submitButtonOptions': {
+            props: {
+              className: 'submit-button',
+            },
+            submitText: 'Save Changes',
+          },
+        }}
+      />
+      
+      <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+        <button 
+          onClick={onClose}
+          style={{ 
+            padding: '8px 16px', 
+            background: '#f0f0f0', 
+            border: 'none', 
+            borderRadius: '4px', 
+            cursor: 'pointer' 
+          }}
+        >
+          Cancel
+        </button>
       </div>
     </Modal>
   );
-};
+}
+
+export default RJSFModal;

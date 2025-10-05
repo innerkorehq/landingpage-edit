@@ -1,187 +1,167 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { EditableComponentWrapper } from '@/components/EditableComponentWrapper';
-import { useEditorStore } from '@/stores/editorStore';
-import apiClient, { ApiError } from '@/lib/apiClient';
-import { PageComponentInstance, Page } from '@/types';
+import { useAuth } from '@/contexts/AuthContext';
+import { Page, PageComponentInstance } from '@/types';
+import EditableComponentWrapper from '@/components/EditableComponentWrapper';
+import RJSFModal from '@/components/RJSFModal';
 
-// Loading state component
-const LoadingState = () => (
-  <div style={{ 
-    padding: '2rem', 
-    textAlign: 'center',
-    color: '#666'
-  }}>
-    <div style={{ 
-      display: 'inline-block',
-      width: '50px',
-      height: '50px',
-      border: '5px solid #f3f3f3',
-      borderTop: '5px solid #3498db',
-      borderRadius: '50%',
-      animation: 'spin 1s linear infinite'
-    }} />
-    <p>Loading page components...</p>
-    <style jsx>{`
-      @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-      }
-    `}</style>
-  </div>
-);
+interface PreviewPageProps {
+  params: {
+    pageId: string;
+  };
+}
 
-// Error state component
-const ErrorState = ({ message }: { message: string }) => (
-  <div style={{
-    padding: '2rem',
-    margin: '1rem',
-    border: '1px solid #f5c6cb',
-    borderRadius: '4px',
-    backgroundColor: '#f8d7da',
-    color: '#721c24'
-  }}>
-    <h3>Error Loading Preview</h3>
-    <p>{message}</p>
-    <button 
-      onClick={() => window.location.reload()}
-      style={{
-        padding: '8px 16px',
-        marginTop: '1rem',
-        background: '#0070f3',
-        color: 'white',
-        border: 'none',
-        borderRadius: '4px',
-        cursor: 'pointer'
-      }}
-    >
-      Retry
-    </button>
-  </div>
-);
-
-// Empty state component
-const EmptyState = () => (
-  <div style={{
-    padding: '3rem',
-    margin: '2rem',
-    textAlign: 'center',
-    border: '2px dashed #ccc',
-    borderRadius: '8px',
-    color: '#666'
-  }}>
-    <h3>No Components Found</h3>
-    <p>This page doesn't have any components yet.</p>
-    <p>Use the editor to add components to this page.</p>
-  </div>
-);
-
-export default function PreviewPage({ params }: { params: { pageId: string } }) {
-  const [isReady, setIsReady] = useState(false);
+export default function PreviewPage({ params }: PreviewPageProps) {
+  const { apiClient } = useAuth();
+  const [page, setPage] = useState<Page | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { page, setPage, setError: setStoreError, isLoading, setIsLoading } = useEditorStore();
-
-  // Initialize communication with parent frame
-  useEffect(() => {
-    // Signal to the parent that we're ready to receive data
-    if (window.parent !== window) {
-      window.parent.postMessage({ type: 'PREVIEW_READY' }, '*');
-      setIsReady(true);
-    }
-    
-    // Handle messages from parent
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data.type === 'PAGE_UPDATE' && event.data.payload) {
-        try {
-          setPage(event.data.payload);
-          setError(null);
-        } catch (err) {
-          console.error('Error updating page from message:', err);
-          setError('Failed to process page data from editor');
-        }
-      }
-    };
-    
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [setPage]);
+  const [editingComponentId, setEditingComponentId] = useState<string | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   
-  // If we're not in an iframe or haven't received data through messages,
-  // fetch the data directly
+  // Find the component being edited
+  const editingComponent = editingComponentId && page?.components 
+    ? page.components.find(c => c.id === editingComponentId)
+    : null;
+
+  // Load page data
   useEffect(() => {
     const fetchPageData = async () => {
-      if (page) return; // Already have data
-      if (window.parent !== window && isReady) return; // Expect data via postMessage
-      
       try {
         setIsLoading(true);
-        const pageData = await apiClient.getPageForEditor(params.pageId);
-        const componentsData = await apiClient.getPageComponents(params.pageId);
-        
-        // Combine the data
-        const fullPageData: Page = {
-          ...pageData,
-          components: componentsData
-        };
-        
-        setPage(fullPageData);
         setError(null);
-      } catch (err) {
-        console.error('Failed to fetch page data:', err);
-        if (err instanceof ApiError) {
-          setError(`API Error (${err.status}): ${err.message}`);
-          setStoreError(err);
-        } else {
-          setError('Failed to load page data');
-          setStoreError(err as Error);
+        const pageData = await apiClient.getPageForEditor(params.pageId);
+        setPage(pageData);
+        
+        // Inform parent window that the preview is ready
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'PREVIEW_READY' }, '*');
         }
+      } catch (err) {
+        console.error('Failed to load page:', err);
+        setError('Failed to load page data. Please try refreshing.');
       } finally {
         setIsLoading(false);
       }
     };
-    
+
     fetchPageData();
-  }, [params.pageId, page, isReady, setPage, setStoreError, setIsLoading]);
-  
-  // Handle component prop updates (for two-way communication)
-  const handleComponentUpdate = (instanceId: string, newProps: Record<string, any>) => {
-    if (window.parent !== window) {
-      window.parent.postMessage({
-        type: 'COMPONENT_PROPS_UPDATE',
-        payload: { instanceId, newPropsData: newProps }
+  }, [params.pageId, apiClient]);
+
+  // Handle messages from parent window (editor)
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data.type === 'PAGE_UPDATE' && event.data.payload) {
+        setPage(event.data.payload);
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  // Handle editing a component
+  const handleEditComponent = (instanceId: string) => {
+    setEditingComponentId(instanceId);
+    setIsModalOpen(true);
+  };
+
+  // Handle form submission from modal
+  const handleFormSubmit = (formData: any) => {
+    if (!editingComponentId) return;
+    
+    // Update component props locally
+    if (page && page.components) {
+      const updatedComponents = page.components.map(comp => 
+        comp.id === editingComponentId 
+          ? { ...comp, props_data: formData } 
+          : comp
+      );
+      
+      setPage(prev => prev ? { ...prev, components: updatedComponents } : null);
+    }
+    
+    // Send update to parent window (editor)
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ 
+        type: 'COMPONENT_PROPS_UPDATE', 
+        payload: { 
+          instanceId: editingComponentId, 
+          newPropsData: formData 
+        } 
       }, '*');
     }
+    
+    setEditingComponentId(null);
+    setIsModalOpen(false);
   };
-  
-  // Render states
+
+  if (isLoading) {
+    return (
+      <div style={{ padding: '20px', textAlign: 'center' }}>
+        Loading preview...
+      </div>
+    );
+  }
+
   if (error) {
-    return <ErrorState message={error} />;
+    return (
+      <div style={{ padding: '20px', color: 'red' }}>
+        <h2>Error</h2>
+        <p>{error}</p>
+        <button onClick={() => window.location.reload()}>Reload</button>
+      </div>
+    );
   }
-  
-  if (!page || isLoading) {
-    return <LoadingState />;
+
+  if (!page || !page.components || page.components.length === 0) {
+    return (
+      <div style={{ padding: '20px', textAlign: 'center' }}>
+        <h2>No Content Yet</h2>
+        <p>This page has no components to preview.</p>
+      </div>
+    );
   }
-  
-  if (!page.components || page.components.length === 0) {
-    return <EmptyState />;
-  }
-  
+
   // Sort components by order_index
-  const sortedComponents = [...page.components].sort(
-    (a, b) => a.order_index - b.order_index
-  );
-  
+  const sortedComponents = [...page.components].sort((a, b) => a.order_index - b.order_index);
+
   return (
-    <div className="page-preview" onClick={() => window.parent !== window && window.parent.postMessage({ type: 'DESELECT_COMPONENT' }, '*')}>
-      <div className="components-container" style={{ padding: '1rem' }}>
-        {sortedComponents.map(instance => (
-          <EditableComponentWrapper 
-            key={instance.id} 
+    <div className="preview-container">
+      {/* Page title */}
+      <header style={{ padding: '20px 0', borderBottom: '1px solid #eee', marginBottom: '20px' }}>
+        <h1>{page.title || page.name}</h1>
+        {page.description && <p>{page.description}</p>}
+      </header>
+
+      {/* Components */}
+      <main>
+        {sortedComponents.map((instance) => (
+          <EditableComponentWrapper
+            key={instance.id}
             instance={instance}
+            onEdit={handleEditComponent}
+            isEditing={editingComponentId === instance.id}
           />
         ))}
-      </div>
+      </main>
+
+      {/* Edit modal */}
+      {editingComponent && editingComponent.component_variation && (
+        <RJSFModal
+          isOpen={isModalOpen}
+          onClose={() => {
+            setIsModalOpen(false);
+            setEditingComponentId(null);
+          }}
+          onSubmit={handleFormSubmit}
+          schema={editingComponent.component_variation.json_schema}
+          formData={editingComponent.props_data}
+          title={`Edit ${editingComponent.instance_name}`}
+          componentName={editingComponent.component_variation.name}
+        />
+      )}
     </div>
   );
 }

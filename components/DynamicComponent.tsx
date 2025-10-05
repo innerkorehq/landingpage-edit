@@ -1,102 +1,131 @@
-"use client";
+import React, { useState, useEffect } from 'react';
+import { transform } from '@babel/standalone';
+import { ErrorBoundary } from 'react-error-boundary';
+import * as uiComponents from '@/components/ui';
+import { ComponentVariation } from '@/types';
 
-import React, { lazy, Suspense } from "react";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertCircle } from "lucide-react";
-
-// Define the props types for the dynamic component
 interface DynamicComponentProps {
-  componentName: string;
-  props?: Record<string, any>;
+  code: string;
+  componentProps: Record<string, any>;
+  onRenderError?: (error: Error) => void;
 }
 
-// Map of component names to their corresponding imports
-const componentMap: Record<string, React.ComponentType<any>> = {};
+interface ErrorFallbackProps {
+  error: Error;
+  resetErrorBoundary: () => void;
+}
 
-// Function to dynamically import a component
-const importComponent = async (componentName: string): Promise<React.ComponentType<any> | null> => {
-  try {
-    // Try to import from ui components first
-    try {
-      const module = await import(`@/components/ui/${componentName.toLowerCase()}`);
-      return module.default || module[componentName];
-    } catch (uiError) {
-      // If not found in ui, try importing from regular components
-      const module = await import(`@/components/${componentName}`);
-      return module.default || module[componentName];
-    }
-  } catch (error) {
-    console.error(`Failed to load component: ${componentName}`, error);
-    return null;
-  }
-};
-
-// Component error state
-const ErrorComponent: React.FC<{ name: string }> = ({ name }) => {
+const ErrorFallback = ({ error, resetErrorBoundary }: ErrorFallbackProps) => {
   return (
-    <Alert variant="destructive" className="my-2">
-      <AlertCircle className="h-4 w-4" />
-      <AlertDescription>
-        Failed to load component: {name}
-      </AlertDescription>
-    </Alert>
+    <div 
+      role="alert" 
+      style={{
+        padding: '15px',
+        margin: '10px 0',
+        color: '#ff3333',
+        backgroundColor: 'rgba(255, 0, 0, 0.1)',
+        border: '1px solid #ff6666',
+        borderRadius: '4px'
+      }}
+    >
+      <p>Something went wrong with this component:</p>
+      <pre style={{ whiteSpace: 'pre-wrap', overflow: 'auto' }}>
+        {error.message}
+      </pre>
+      <button 
+        onClick={resetErrorBoundary}
+        style={{
+          background: '#ff3333',
+          color: 'white',
+          border: 'none',
+          padding: '5px 10px',
+          borderRadius: '4px',
+          cursor: 'pointer'
+        }}
+      >
+        Try again
+      </button>
+    </div>
   );
 };
 
-// Loading state
-const LoadingComponent: React.FC = () => {
-  return <Skeleton className="w-full h-20" />;
-};
+export function DynamicComponent({ code, componentProps, onRenderError }: DynamicComponentProps) {
+  const [Component, setComponent] = useState<React.ComponentType<any> | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-const DynamicComponent: React.FC<DynamicComponentProps> = ({ componentName, props = {} }) => {
-  const [Component, setComponent] = React.useState<React.ComponentType<any> | null>(null);
-  const [error, setError] = React.useState<boolean>(false);
-
-  React.useEffect(() => {
+  useEffect(() => {
     let isMounted = true;
-    
-    const loadComponent = async () => {
+
+    const transpileAndCreateComponent = async () => {
       try {
-        // Try to get from cache first
-        if (componentMap[componentName]) {
-          if (isMounted) setComponent(componentMap[componentName]);
-          return;
+        // Transpile JSX to JavaScript
+        const transpiled = transform(code, {
+          presets: ['react', 'typescript'],
+          filename: 'component.tsx',
+        }).code;
+
+        if (!transpiled) {
+          throw new Error('Failed to transpile component code');
         }
-        
-        // Import the component
-        const loadedComponent = await importComponent(componentName);
-        
-        if (loadedComponent) {
-          // Cache the component for future use
-          componentMap[componentName] = loadedComponent;
-          
-          if (isMounted) setComponent(loadedComponent);
-        } else {
-          if (isMounted) setError(true);
+
+        // Create a function that returns the component
+        const createComponent = new Function(
+          'React', 
+          'components',
+          `${transpiled};
+           return Component;`
+        );
+
+        // Execute the function to get the component
+        if (isMounted) {
+          const DynamicComponent = createComponent(React, uiComponents);
+          setComponent(() => DynamicComponent);
+          setError(null);
         }
       } catch (err) {
-        console.error(`Error loading component ${componentName}:`, err);
-        if (isMounted) setError(true);
+        const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+        console.error('Failed to render dynamic component:', errorMessage);
+        
+        if (isMounted) {
+          setError(errorMessage);
+          setComponent(null);
+          if (onRenderError && err instanceof Error) {
+            onRenderError(err);
+          }
+        }
       }
     };
 
-    loadComponent();
-    
+    transpileAndCreateComponent();
+
     return () => {
       isMounted = false;
     };
-  }, [componentName]);
+  }, [code, onRenderError]);
 
   if (error) {
-    return <ErrorComponent name={componentName} />;
+    return (
+      <div style={{ padding: '15px', color: 'red', backgroundColor: '#fff1f0', border: '1px solid #ffa39e', borderRadius: '4px' }}>
+        <p>Error rendering component:</p>
+        <pre style={{ whiteSpace: 'pre-wrap', overflow: 'auto' }}>{error}</pre>
+      </div>
+    );
   }
 
   if (!Component) {
-    return <LoadingComponent />;
+    return <div>Loading component...</div>;
   }
 
-  return <Component {...props} />;
-};
-
-export default DynamicComponent;
+  return (
+    <ErrorBoundary 
+      FallbackComponent={ErrorFallback} 
+      onError={(error) => {
+        console.error('Component runtime error:', error);
+        if (onRenderError) onRenderError(error);
+      }}
+      resetKeys={[code, JSON.stringify(componentProps)]}
+    >
+      <Component {...componentProps} />
+    </ErrorBoundary>
+  );
+}
